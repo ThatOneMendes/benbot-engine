@@ -1,0 +1,44 @@
+{
+    "bencoins": {
+        "data": {
+            "type": "NUMBER",
+            "allowNull": false
+        },
+        "defaultValue": 0
+    },
+    "about": {
+        "data": {
+            "type": "STRING",
+            "allowNull": false
+        },
+        "defaultValue": "This user does not have an about me."
+    },
+    "level": {
+        "data": {
+            "type": "NUMBER",
+            "allowNull": false
+        },
+        "defaultValue": 1
+    },
+    "experience": {
+        "data": {
+            "type": "NUMBER",
+            "allowNull": false
+        },
+        "defaultValue": 0
+    },
+    "id": {
+        "data": {
+            "primaryKey": true,
+            "allowNull": false,
+            "type": "STRING"
+        },
+        "defaultValue": "0"
+    },
+    "inventory": {
+        "data": {
+            "type": "STRING",
+            "allowNull": true
+        }
+    }
+}

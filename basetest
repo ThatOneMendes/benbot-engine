@@ -1,0 +1,34 @@
+{
+    "name": "command_name",
+    "description": "desc",
+    "data": {},
+    "hasSubcommands": true,
+    "subcommands": [
+        {
+            "name": "subcommand_string",
+            "description": "yes.",
+            "options": [
+                {
+                    "name": "user_name",
+                    "description": "captain ahab",
+                    "type": "String",
+                    "data": {
+                        "minLength": 1,
+                        "maxLength": 12,
+                        "required": true,
+                        "autocomplete": true
+                    },
+                    "choices": [
+                        {"name": "captain", "value": "ahab"}
+                    ]
+                }
+            ]
+        }
+    ]
+}
+{
+    "name": "command_name_nosub",
+    "description": "description",
+    "options": [],
+    "data": {}
+}
