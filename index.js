@@ -7,7 +7,6 @@ const {
     Client,
     Collection,
     SlashCommandBuilder,
-    SlashCommandSubcommandGroupBuilder,
     SlashCommandSubcommandBuilder,
     REST,
     Routes,
