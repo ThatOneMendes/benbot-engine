@@ -9,34 +9,44 @@ const {
     SlashCommandBuilder,
     SlashCommandSubcommandGroupBuilder,
     SlashCommandSubcommandBuilder,
+    REST,
+    Routes,
 } = require("discord.js");
 const ITEM_FLAGS = require("./config/item_flags.js");
 
 /**
-    * @typedef {Object} BenbotOptionChoice
-    * @property {string} name The choice name to be displayed
-    * @property {any} value The internal value of the choice
-    * @property {import('discord.js').LocalizationMap|undefined} name_localizations
-*/
+ * @callback BenbotInteractionCallback
+ * @param {BenbotInstance} instance
+ * @param {import('discord.js').Interaction} interaction
+ * @returns {void}
+ * @async
+ */
 
 /**
-    * @typedef {Object} BenbotOption
-    * @property {string} name The option name
-    * @property {string} description The option description
-    * @property {string} type The option type. Take a `SlashCommandBuilder` and look at all the "add(something)Option" methods, if you want to add an StringOption, set this to `"String"`. Same goes for all other option types.
-    * @property {Object} data Extra fields that can be set optionally. For example, if this is a StringOption and you want to set the minimum string length, set `data.MinLength` to a positive number.
-    * @property {Array<BenbotOptionChoice>|undefined} choices An array of `BenbotOptionChoices`. Only some option types use this and its not required to.
-*/
+ * @typedef {Object} BenbotOptionChoice
+ * @property {string} name The choice name to be displayed
+ * @property {any} value The internal value of the choice
+ * @property {import('discord.js').LocalizationMap|undefined} name_localizations
+ */
 
 /**
-    * @typedef {Object} BenbotCommand
-    * @property {string} name The command/subcommand name.
-    * @property {string} description The command/subcommand description.
-    * @property {Object} data Extra fields that can be set optionally. For example, if you want to make the command use autocomplete, you would add a key named `"autocomplete"` with value set to `true`.
-    * @property {boolean} hasSubcommands If this command has subcommands, set this to true. Setting this to true will make the command parser expect an array of `BenbotCommands` set as `"subcommands"`. The command parser ignores this value on any `BenbotCommands` passed in the subcommands array.
-    * @property {Array<BenbotCommand>|undefined} subcommands An array containing the subcommands of a command.
-    * @property {Array<BenbotOptionChoice>} options The options that a command should have.
-*/
+ * @typedef {Object} BenbotOption
+ * @property {string} name The option name
+ * @property {string} description The option description
+ * @property {string} type The option type. Take a `SlashCommandBuilder` and look at all the "add(something)Option" methods, if you want to add an StringOption, set this to `"String"`. Same goes for all other option types.
+ * @property {Object} data Extra fields that can be set optionally. For example, if this is a StringOption and you want to set the minimum string length, set `data.MinLength` to a positive number.
+ * @property {Array<BenbotOptionChoice>|undefined} choices An array of `BenbotOptionChoices`. Only some option types use this and its not required to.
+ */
+
+/**
+ * @typedef {Object} BenbotCommand
+ * @property {string} name The command/subcommand name.
+ * @property {string} description The command/subcommand description.
+ * @property {Object} data Extra fields that can be set optionally. For example, if you want to make the command use autocomplete, you would add a key named `"autocomplete"` with value set to `true`.
+ * @property {boolean} hasSubcommands If this command has subcommands, set this to true. Setting this to true will make the command parser expect an array of `BenbotCommands` set as `"subcommands"`. The command parser ignores this value on any `BenbotCommands` passed in the subcommands array.
+ * @property {Array<BenbotCommand>|undefined} subcommands An array containing the subcommands of a command.
+ * @property {Array<BenbotOptionChoice>} options The options that a command should have.
+ */
 
 class InventoryItem {
     #id = "";
@@ -319,7 +329,7 @@ class Inventory {
         return totalCount;
     }
 
-    toJSONString() {
+    toJSON() {
         let objectToBeStringified = {
             maxSlots: this.maxSlots,
             items: [],
@@ -330,17 +340,15 @@ class Inventory {
             objectToBeStringified.items.push(item.toJSONString());
         }
 
-        return JSON.stringify(objectToBeStringified);
+        return objectToBeStringified;
     }
 
     /**
-     * Creates an inventory from a JSON string.
-     * @param {string} inventoryJSONString
+     * Creates an inventory from a JSON object.
+     * @param {Object} inventoryObject
      * @param {DiscordUser} user
      */
-    static fromJSONString(inventoryJSONString, user) {
-        let inventoryObject = JSON.parse(inventoryJSONString);
-
+    static fromJSON(inventoryObject, user) {
         let inventory = new Inventory(user);
 
         for (let i = 0; i < inventoryObject.items.length; i++) {
@@ -416,7 +424,7 @@ class User {
         this.#model = model;
         this.#instance = instance;
 
-        this.inventory = Inventory.fromJSONString(model.inventory, user);
+        this.inventory = Inventory.fromJSON(JSON.parse(model.inventory), user);
     }
 
     /**
@@ -428,7 +436,7 @@ class User {
         this.#model.level = this.level;
         this.#model.experience = this.experience;
         this.#model.id = this.#id;
-        this.#model.inventory = this.inventory.toJSONString();
+        this.#model.inventory = JSON.stringify(this.inventory.toJSON());
 
         await this.#model.save();
     }
@@ -450,11 +458,59 @@ class BenbotInstance {
          * @type {Client}
          */
         client: null,
+        /**
+         * @type {Collection<SlashCommandBuilder, BenbotInteractionCallback>}
+         */
+        slashCommands: new Collection(),
         inventory_item_flags: {},
+        /**
+         * @type {REST}
+         */
+        rest: null,
+        botUserID: "",
+        /**
+         * @type {Object<keyof import('discord.js').ClientEvents, Object<Function, Function>>}
+         */
+        clientEventCollection: {},
     };
 
+    /**
+     * Listens to a event within this instance's client.
+     * Unlike regular `EventListeners`, this function does check already added listeners, so trying to add the same listener to the same `event` will throw an error.
+     * @param {keyof import('discord.js').ClientEvents} event
+     * @param {(instance : BenbotInstance, ...any) => void} callback
+     */
+    onClientEvent(event, callback) {
+        let events = this.#private.clientEventCollection[event];
+        if (typeof events === "undefined") {
+            events = {};
+            this.#private.clientEventCollection[event] = events;
+        }
+        assert(
+            callback in events === false,
+            "This event already has this callback listening to it.",
+        );
+        const bindFunction = (...args) => {
+            callback(this, ...args);
+        };
+        events[callback] = bindFunction;
+        this.client.on(event, bindFunction);
+    }
+
+    /**
+     * Disconnects a callback from listening a client event.
+     * @param {keyof import('discord.js').ClientEvents} event
+     * @param {(instance : BenbotInstance, ...any) => void} callback
+     */
+    offClientEvent(event, callback) {
+        let events = this.#private.clientEventCollection[events];
+        if (typeof events === "undefined") return;
+        if (callback in events === false) return;
+        this.client.off(event, events[callback]);
+        delete events[callback];
+    }
+
     #onInstanceCreate() {
-        this.#private.client.commands = new Collection();
         for (const item_flag in ITEM_FLAGS) {
             this.#private.inventory_item_flags[item_flag] =
                 ITEM_FLAGS[item_flag];
@@ -551,9 +607,11 @@ class BenbotInstance {
      *     await instance.init("bot token here", extraAttributes);
      * ```
      * @param {string} botToken The bot token of the discord bot.
+     * @param {string} botUserID The user ID of the bot.
      */
-    async init(botToken, extraAttributes) {
+    async init(botToken, botUserID, extraAttributes) {
         if (typeof botToken !== "string") throw "botToken is not a string.";
+        if (typeof botUserID !== "string") throw "botUserID is not a string.";
 
         if (this.#private.initialized === true) return;
 
@@ -585,11 +643,12 @@ class BenbotInstance {
             this.#private.attributes,
         );
 
-        await this.#private.client.login(botToken);
-        this.#private.client.on("interactionCreate", this.#onInteractionCreate);
+        await this.client.login(botToken);
+        this.client.on("interactionCreate", this.#onInteractionCreate);
+        this.#private.rest = new REST().setToken(botToken);
+        this.#private.botUserID = botUserID;
 
         this.#private.initialized = true;
-
         return;
     }
 
@@ -624,64 +683,97 @@ class BenbotInstance {
         }
 
         return new User(userModel, user, this);
-    } 
+    }
 
     #makeCommand(commandData, isSubcommand) {
-        let command = isSubcommand ? new SlashCommandSubcommandBuilder() : new SlashCommandBuilder();
-        command.setName(commandData.name)
-        command.setDescription(commandData.description)
-        for(const commandDataKey of commandData.data) {
-            const commandDataValue = commandData.data[commandDataKey]
-            if(typeof(command[`set${commandDataKey}`]) === "function") {
-                command[`set${commandDataKey}`](commandDataValue)
-                continue
+        let command = isSubcommand
+            ? new SlashCommandSubcommandBuilder()
+            : new SlashCommandBuilder();
+        command.setName(commandData.name);
+        command.setDescription(commandData.description);
+        for (const commandDataKey of commandData.data) {
+            const commandDataValue = commandData.data[commandDataKey];
+            if (typeof command[`set${commandDataKey}`] === "function") {
+                command[`set${commandDataKey}`](commandDataValue);
+                continue;
             }
-            command[commandDataKey] = commandDataValue
+            command[commandDataKey] = commandDataValue;
         }
-        if(!isSubcommand && commandData.hasSubcommands === true) {
-            for(let iSubcommand = 0; iSubcommand < commandData.subcommands.length; isSubcommand++) {
-                const subcommand = this.#makeCommand(commandData.subcommands[iSubcommand], true)
-                command.addSubcommand(subcommand)
+        if (!isSubcommand && commandData.hasSubcommands === true) {
+            for (
+                let iSubcommand = 0;
+                iSubcommand < commandData.subcommands.length;
+                isSubcommand++
+            ) {
+                const subcommand = this.#makeCommand(
+                    commandData.subcommands[iSubcommand],
+                    true,
+                );
+                command.addSubcommand(subcommand);
             }
-            return command
+            return command;
         }
-        for(let iOption = 0; iOption < commandData.options.length; iOption++) {
-            this.#parseCommandOptions(command, commandData.options[iOption])
+        for (let iOption = 0; iOption < commandData.options.length; iOption++) {
+            this.#parseCommandOptions(command, commandData.options[iOption]);
         }
-        return command
+        return command;
     }
 
     /**
      * @param {SlashCommandBuilder|SlashCommandSubcommandBuilder} command
-     * @param {BenbotOption} optionData  
-    */
+     * @param {BenbotOption} optionData
+     */
     #parseCommandOptions(command, optionData) {
-        assert(command[`add${optionData.type}Option`] !== undefined, `No such option type as ${optionData.type}.`)
+        assert(
+            `add${optionData.type}Option` in command,
+            `No such option type as ${optionData.type}.`,
+        );
         command[`add${optionData.type}Option`]((builder) => {
-            builder.setName(optionData.name)
-            builder.setDescription(optionData.description)
-            for(let optionDataKey of optionData.data) {
-                const optionDataValue = optionData.data[optionDataKey]
-                if(typeof(builder[`set${optionDataKey}`]) === "function") {
-                    builder[`set${optionDataKey}`](optionDataValue)
+            builder.setName(optionData.name);
+            builder.setDescription(optionData.description);
+            for (let optionDataKey of optionData.data) {
+                const optionDataValue = optionData.data[optionDataKey];
+                if (typeof builder[`set${optionDataKey}`] === "function") {
+                    builder[`set${optionDataKey}`](optionDataValue);
                     continue;
                 }
-                builder[optionDataKey] = optionDataValue
+                builder[optionDataKey] = optionDataValue;
             }
-            if(builder["setChoices"] !== undefined) builder.setChoices(optionData.choices)
+            if (builder["setChoices"] !== undefined)
+                builder.setChoices(optionData.choices);
             return builder;
-        })
+        });
     }
 
     /**
-        * Creates a slash command that when ran calls `callback`.
-        * @param {async (instance : BenbotInstance, interaction : import('discord.js').Interaction) => void|undefined} callback
-        * @param {BenbotCommand} commandData 
-    */
+     * Creates a slash command that when ran calls `callback`. You may pass an already existing `SlashCommandBuilder` as the `commandData` argument.
+     * @param {BenbotInteractionCallback} callback
+     * @param {BenbotCommand|SlashCommandBuilder} commandData
+     */
     addCommand(commandData, callback) {
-        let command = this.#makeCommand(commandData, false);
-        
-    } 
+        let command = commandData;
+        if (commandData instanceof SlashCommandBuilder === false)
+            command = this.#makeCommand(commandData, false);
+        this.#private.slashCommands.set(command, callback);
+    }
+
+    /**
+     * Tells discord that we have some commands we would like to register. Should only be called once then only again after a you add a new slash command.
+     * @param {import('discord.js').RouteLike|undefined} route A custom route that should be used to register the commands. If not specified it uses Routes.applicationCommands() as the default.
+     */
+    async registerCommands(route) {
+        let commands = [];
+        this.#private.slashCommands.forEach((_, slashCommand) => {
+            commands.push(slashCommand.toJSON());
+        });
+        try {
+            if (!route)
+                route = Routes.applicationCommands(this.#private.botUserID);
+            await this.#private.rest.put(route, { body: commands });
+        } catch (error) {
+            console.error(error);
+        }
+    }
 
     /**
      * @param {import('discord.js').Interaction} interaction
@@ -689,10 +781,11 @@ class BenbotInstance {
     async #onInteractionCreate(interaction) {
         if (interaction.isChatInputCommand()) {
             /**
-             * @type {async (instance : BenbotInstance, interaction : import('discord.js').Interaction) => void|undefined}
+             * @type {BenbotInteractionCallback}
              */
-            const command = this.#private.client.commands.get(
-                interaction.commandName,
+            const command = this.#private.slashCommands.find(
+                (_, slashCommand) =>
+                    slashCommand.name === interaction.command.name,
             );
             if (typeof command === "undefined")
                 return console.warn(
@@ -709,19 +802,6 @@ class BenbotInstance {
             }
             return;
         }
-    }
-
-    /**
-     * Adds a slash command to this `BenbotInstance`
-     * @param {import('discord.js').SlashCommandBuilder} commandData
-     * @param {(instance : BenbotInstance, interaction : import('discord.js').Interaction) => void} callback
-     */
-    addSlashCommand(commandData, callback) {
-        if (commandData instanceof SlashCommandBuilder === false)
-            throw "commandData must be a SlashCommandBuilder";
-        if (typeof callback !== "function") throw "callback must be a function";
-
-        this.#private.client.commands.set(commandData.name, callback);
     }
 
     /**
