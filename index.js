@@ -12,13 +12,16 @@ const {
     Routes,
 } = require("discord.js");
 const ITEM_FLAGS = require("./config/item_flags.js");
+const INSTANCE_NOT_INITIALIZED =
+    "This BenbotInstance was not initialized yet. Call init() on this instance before calling any other methods.";
 
 /**
  * @callback BenbotInteractionCallback
  * @param {BenbotInstance} instance
+ * @param {User} user
  * @param {import('discord.js').Interaction} interaction
- * @returns {void}
  * @async
+ * @returns {void}
  */
 
 /**
@@ -458,7 +461,7 @@ class BenbotInstance {
          */
         client: null,
         /**
-         * @type {Collection<SlashCommandBuilder, BenbotInteractionCallback>}
+         * @type {Collection<SlashCommandBuilder, BenbotInteractionCallback|Object<string, BenbotInteractionCallback>>}
          */
         slashCommands: new Collection(),
         inventory_item_flags: {},
@@ -471,6 +474,8 @@ class BenbotInstance {
          * @type {Object<keyof import('discord.js').ClientEvents, Object<Function, Function>>}
          */
         clientEventCollection: {},
+        /** @type {Collection<string, User>} */
+        userCache: new Collection(),
     };
 
     /**
@@ -480,6 +485,7 @@ class BenbotInstance {
      * @param {(instance : BenbotInstance, ...any) => void} callback
      */
     onClientEvent(event, callback) {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
         let events = this.#private.clientEventCollection[event];
         if (typeof events === "undefined") {
             events = {};
@@ -502,6 +508,7 @@ class BenbotInstance {
      * @param {(instance : BenbotInstance, ...any) => void} callback
      */
     offClientEvent(event, callback) {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
         let events = this.#private.clientEventCollection[events];
         if (typeof events === "undefined") return;
         if (callback in events === false) return;
@@ -521,6 +528,7 @@ class BenbotInstance {
      * @param {string} item_flag The flag to be added
      */
     add_inventory_item_flag(item_flag) {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
         if (
             typeof this.#private.inventory_item_flags[item_flag] !== "undefined"
         )
@@ -533,6 +541,7 @@ class BenbotInstance {
      * @param {string} item_flag The flag to be removed.
      */
     remove_inventory_item_flag(item_flag) {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
         if (
             typeof this.#private.inventory_item_flags[item_flag] === "undefined"
         )
@@ -605,12 +614,17 @@ class BenbotInstance {
      * @param {string} botUserID The user ID of the bot.
      */
     async init(botToken, botUserID, extraAttributes) {
-        if (typeof botToken !== "string") throw "botToken is not a string.";
-        if (typeof botUserID !== "string") throw "botUserID is not a string.";
+        assert(
+            typeof botToken === "string",
+            "botToken argument must be a string",
+        );
+        assert(
+            typeof botUserID === "string",
+            "botUserID argument must be a string",
+        );
         if (this.#private.initialized === true) return;
         if (extraAttributes instanceof Object === false) extraAttributes = {};
 
-        if (extraAttributes instanceof Object === false) extraAttributes = {};
         extraAttributes = copyObject(extraAttributes);
 
         await this.#private.database.authenticate();
@@ -638,7 +652,10 @@ class BenbotInstance {
         );
 
         await this.client.login(botToken);
-        this.client.on("interactionCreate", this.#onInteractionCreate);
+        this.client.on(
+            "interactionCreate",
+            this.#onInteractionCreate.bind(this),
+        );
         this.#private.rest = new REST().setToken(botToken);
         this.#private.botUserID = botUserID;
 
@@ -659,10 +676,14 @@ class BenbotInstance {
      * @returns {User}
      */
     async getUser(user) {
-        if (user instanceof DiscordUser === false)
-            throw "user must be a discord User";
-        if (this.#private.initialized === false)
-            throw "This BenbotInstance was not initialized yet. Run init() before calling any other methods.";
+        assert(
+            user instanceof DiscordUser,
+            "user argument must be a Discord User.",
+        );
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
+
+        if (this.#private.userCache.has(user.id))
+            return this.#private.userCache.get(user.id);
 
         const [userModel, created] = await this.#private.userModel.findOrCreate(
             {
@@ -678,11 +699,25 @@ class BenbotInstance {
                 userModel[attributeName] = attributeData.defaultValue;
             }
 
-            userModel.inventory = new Inventory(user).toJSONString();
+            userModel.inventory = JSON.stringify(new Inventory(user).toJSON());
             await userModel.save();
         }
 
-        return new User(userModel, user, this);
+        const createdUser = new User(userModel, user, this);
+        this.#private.userCache.set(user.id, createdUser);
+        return createdUser;
+    }
+
+    /**
+     * Saves the data of every user that was fetched from the Sequelize database and clears up the user cache.
+     */
+    async clearUserCache() {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
+        for (const userID of this.#private.userCache.keys()) {
+            const user = this.#private.userCache.get(userID);
+            await user.save();
+            this.#private.userCache.delete(userID);
+        }
     }
 
     /**
@@ -754,14 +789,41 @@ class BenbotInstance {
     }
 
     /**
-     * Creates a slash command that when ran calls `callback`. You may pass an already existing `SlashCommandBuilder` as the `commandData` argument.
-     * @param {BenbotInteractionCallback} callback
+     * Creates a slash command that when ran calls `callback`. If `commandData` is a `BenbotCommand` and `commandData.hasSubcommands` is set to `true`, `callback` must be an `Object` where the keys are the subcommand names and the values are their respective `BenbotInteractionCallbacks`.
+     * You may pass an already existing `SlashCommandBuilder` as the `commandData` argument.
+     * @param {BenbotInteractionCallback|Object<string, BenbotInteractionCallback>} callback
      * @param {BenbotCommand|SlashCommandBuilder} commandData
      */
     addCommand(commandData, callback) {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
+        /**
+         * @type {SlashCommandBuilder}
+         */
         let command = commandData;
-        if (commandData instanceof SlashCommandBuilder === false)
+        if (commandData instanceof SlashCommandBuilder === false) {
             command = this.#makeCommand(commandData, false);
+            if (commandData.hasSubcommands === true) {
+                assert(
+                    callback instanceof Object,
+                    `Command ${commandData.name} has subcommands, but no callback map was passed.`,
+                );
+                for (
+                    let iSubcommand = 0;
+                    iSubcommand < commandData.subcommands.length;
+                    iSubcommand++
+                ) {
+                    const subcommand = commandData.subcommands[iSubcommand];
+                    assert(
+                        subcommand.name in callback,
+                        `Callback function for subcommand ${subcommand.name} not found.`,
+                    );
+                }
+            } else
+                assert(
+                    typeof callback === "function",
+                    `Passed command callback is not a function.`,
+                );
+        }
         this.#private.slashCommands.set(command, callback);
     }
 
@@ -770,6 +832,7 @@ class BenbotInstance {
      * @param {import('discord.js').RouteLike|undefined} route A custom route that should be used to register the commands. If not specified it uses Routes.applicationCommands() as the default.
      */
     async registerCommands(route) {
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
         let commands = [];
         this.#private.slashCommands.forEach((_, slashCommand) => {
             commands.push(slashCommand.toJSON());
@@ -789,22 +852,40 @@ class BenbotInstance {
     async #onInteractionCreate(interaction) {
         if (interaction.isChatInputCommand()) {
             /**
-             * @type {BenbotInteractionCallback}
+             * @type {BenbotInteractionCallback|Object<string, BenbotInteractionCallback>}
              */
             const command = this.#private.slashCommands.find(
                 (_, slashCommand) =>
-                    slashCommand.name === interaction.command.name,
+                    slashCommand.name === interaction.commandName,
             );
             if (typeof command === "undefined")
                 return console.warn(
-                    `Slash command with name ${interaction.command.name} has no matching callback function!`,
+                    `Slash command with name ${interaction.commandName} has no matching callback function!`,
                 );
 
+            const subcommand = interaction.options.getSubcommand(false);
+            if (subcommand !== null) {
+                assert(
+                    command instanceof Object,
+                    `Error when running subcommand ${subcommand} of command ${interaction.commandName}: The command callback is not an Object<string,BenbotInteractionCallback>.`,
+                );
+                assert(
+                    subcommand in command,
+                    `Error when running subcommand ${subcommand} of command ${interaction.commandName}: There is no such key named ${subcommand} in the command callback object.`,
+                );
+                command = command[subcommand];
+            }
+
             try {
-                await command(this, interaction);
+                const user = await this.getUser(interaction.user);
+                await command(this, user, interaction);
             } catch (error) {
                 console.error(
-                    `An error occured when running the callback function from command ${interaction.command.name}!`,
+                    `An error occured when running the callback function from command ${interaction.commandName}!`.concat(
+                        subcommand !== null
+                            ? `(subcommand: ${subcommand})`
+                            : "",
+                    ),
                 );
                 console.error(error);
             }
