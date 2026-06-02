@@ -33,7 +33,7 @@ const ITEM_FLAGS = require("./config/item_flags.js");
  * @property {string} name The option name
  * @property {string} description The option description
  * @property {string} type The option type. Take a `SlashCommandBuilder` and look at all the "add(something)Option" methods, if you want to add an StringOption, set this to `"String"`. Same goes for all other option types.
- * @property {Object} data Extra fields that can be set optionally. For example, if this is a StringOption and you want to set the minimum string length, set `data.MinLength` to a positive number.
+ * @property {Object|undefined} data Extra fields that can be set optionally. For example, if this is a StringOption and you want to set the minimum string length, set `data.MinLength` to a positive number.
  * @property {Array<BenbotOptionChoice>|undefined} choices An array of `BenbotOptionChoices`. Only some option types use this and its not required to.
  */
 
@@ -41,10 +41,10 @@ const ITEM_FLAGS = require("./config/item_flags.js");
  * @typedef {Object} BenbotCommand
  * @property {string} name The command/subcommand name.
  * @property {string} description The command/subcommand description.
- * @property {Object} data Extra fields that can be set optionally. For example, if you want to make the command use autocomplete, you would add a key named `"autocomplete"` with value set to `true`.
- * @property {boolean} hasSubcommands If this command has subcommands, set this to true. Setting this to true will make the command parser expect an array of `BenbotCommands` set as `"subcommands"`. The command parser ignores this value on any `BenbotCommands` passed in the subcommands array.
+ * @property {Object|undefined} data Extra fields that can be set optionally. For example, if you want to make the command use autocomplete, you would add a key named `"autocomplete"` with value set to `true`.
+ * @property {boolean|undefined} hasSubcommands If this command has subcommands, set this to true. Setting this to true will make the command parser expect an array of `BenbotCommands` set as `"subcommands"`. The command parser ignores this value on any `BenbotCommands` passed in the subcommands array.
  * @property {Array<BenbotCommand>|undefined} subcommands An array containing the subcommands of a command.
- * @property {Array<BenbotOptionChoice>} options The options that a command should have.
+ * @property {Array<BenbotOptionChoice>|undefined} options The options that a command should have.
  */
 
 class InventoryItem {
@@ -587,23 +587,19 @@ class BenbotInstance {
      *             "deaths": {
      *                 // data.type is converted to sequelize.DataTypes, then data is passed to database.define().
      *                 // this allows you to add more arguments like "primaryKey" (assuming you change ./config/user_model.json to remove the "primaryKey" value from the "id" attribute)
-     *                 "data": {
-     *                     "type": "NUMBER",
-     *                     "allowNull": false
-     *                 },
+     *                 "type": "NUMBER",
+     *                 "allowNull": false
      *                 "defaultValue": 0
      *             },
      *             // or instead of editing ./config/user_model_attributes.json you can patch the attribute you want by including it
      *             // in your extra attributes object.
      *             "id": {
      *                 // you know what i dont want the "id" attribute to be the primary key anymore.
-     *                 "data": {
-     *                     "primaryKey": false,
-     *                     "type": "STRING"
-     *                 }
+     *                 "primaryKey": false,
+     *                 "type": "STRING"
      *             }
      *     }
-     *     await instance.init("bot token here", extraAttributes);
+     *     await instance.init("bot token here", "bot user ID here", extraAttributes);
      * ```
      * @param {string} botToken The bot token of the discord bot.
      * @param {string} botUserID The user ID of the bot.
@@ -611,8 +607,8 @@ class BenbotInstance {
     async init(botToken, botUserID, extraAttributes) {
         if (typeof botToken !== "string") throw "botToken is not a string.";
         if (typeof botUserID !== "string") throw "botUserID is not a string.";
-
         if (this.#private.initialized === true) return;
+        if (extraAttributes instanceof Object === false) extraAttributes = {};
 
         if (extraAttributes instanceof Object === false) extraAttributes = {};
         extraAttributes = copyObject(extraAttributes);
@@ -621,20 +617,19 @@ class BenbotInstance {
 
         this.#private.attributes = copyObject(userModelJSON);
 
-        for (const [attributeName, attributeData] of Object.entries(
-            extraAttributes,
-        )) {
+        for (const attributeName in extraAttributes) {
+            const attributeData = extraAttributes[attributeName];
             this.#private.attributes[attributeName] = attributeData;
         }
 
-        for (let [attributeName, attributeData] of Object.entries(
-            userModelJSON,
-        )) {
-            const dataType = DataTypes[attributeData.data.type];
-            if (typeof dataType === "undefined")
-                throw `Invalid data type for attribute ${attributeName}. (${attributeData.data.type})`;
-
-            attributeData.data.type = dataType;
+        for (const attributeName in userModelJSON) {
+            const attributeData = userModelJSON[attributeName];
+            assert(
+                attributeData.type in DataTypes,
+                `Invalid data type for attribute ${attributeName}. (${attributeData.type})`,
+            );
+            const dataType = DataTypes[attributeData.type];
+            attributeData.type = dataType;
         }
 
         this.#private.userModel = this.#private.database.define(
@@ -649,6 +644,13 @@ class BenbotInstance {
 
         this.#private.initialized = true;
         return;
+    }
+
+    /**
+     * The sequelize User model this instance uses.
+     */
+    get userModel() {
+        return this.#private.userModel;
     }
 
     /**
@@ -669,9 +671,8 @@ class BenbotInstance {
         );
 
         if (created) {
-            for (const [attributeName, attributeData] of Object.entries(
-                this.#private.attributes,
-            )) {
+            for (const attributeName in this.#private.attributes) {
+                const attributeData = this.#private.attributes[attributeName];
                 if (typeof attributeData["defaultValue"] === "undefined")
                     continue;
                 userModel[attributeName] = attributeData.defaultValue;
@@ -684,13 +685,20 @@ class BenbotInstance {
         return new User(userModel, user, this);
     }
 
+    /**
+     * @param {BenbotCommand} commandData
+     * @param {boolean} isSubcommand
+     */
     #makeCommand(commandData, isSubcommand) {
+        if ("data" in commandData === false) commandData.data = {};
+        if ("options" in commandData === false) commandData.options = [];
+
         let command = isSubcommand
             ? new SlashCommandSubcommandBuilder()
             : new SlashCommandBuilder();
         command.setName(commandData.name);
         command.setDescription(commandData.description);
-        for (const commandDataKey of commandData.data) {
+        for (const commandDataKey in commandData.data) {
             const commandDataValue = commandData.data[commandDataKey];
             if (typeof command[`set${commandDataKey}`] === "function") {
                 command[`set${commandDataKey}`](commandDataValue);
@@ -727,10 +735,11 @@ class BenbotInstance {
             `add${optionData.type}Option` in command,
             `No such option type as ${optionData.type}.`,
         );
+        if ("data" in optionData === false) optionData.data = {};
         command[`add${optionData.type}Option`]((builder) => {
             builder.setName(optionData.name);
             builder.setDescription(optionData.description);
-            for (let optionDataKey of optionData.data) {
+            for (let optionDataKey in optionData.data) {
                 const optionDataValue = optionData.data[optionDataKey];
                 if (typeof builder[`set${optionDataKey}`] === "function") {
                     builder[`set${optionDataKey}`](optionDataValue);
