@@ -728,9 +728,10 @@ class BenbotInstance {
         if ("data" in commandData === false) commandData.data = {};
         if ("options" in commandData === false) commandData.options = [];
 
-        let command = isSubcommand
-            ? new SlashCommandSubcommandBuilder()
-            : new SlashCommandBuilder();
+        let command =
+            isSubcommand === true
+                ? new SlashCommandSubcommandBuilder()
+                : new SlashCommandBuilder();
         command.setName(commandData.name);
         command.setDescription(commandData.description);
         for (const commandDataKey in commandData.data) {
@@ -741,11 +742,11 @@ class BenbotInstance {
             }
             command[commandDataKey] = commandDataValue;
         }
-        if (!isSubcommand && commandData.hasSubcommands === true) {
+        if (isSubcommand === false && commandData.hasSubcommands === true) {
             for (
                 let iSubcommand = 0;
                 iSubcommand < commandData.subcommands.length;
-                isSubcommand++
+                iSubcommand++
             ) {
                 const subcommand = this.#makeCommand(
                     commandData.subcommands[iSubcommand],
@@ -854,7 +855,7 @@ class BenbotInstance {
             /**
              * @type {BenbotInteractionCallback|Object<string, BenbotInteractionCallback>}
              */
-            const command = this.#private.slashCommands.find(
+            let command = this.#private.slashCommands.find(
                 (_, slashCommand) =>
                     slashCommand.name === interaction.commandName,
             );
