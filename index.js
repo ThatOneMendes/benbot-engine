@@ -64,7 +64,7 @@ class InventoryItem {
     constructor(data) {
         this.#id = data.id;
         this.#subtypeID = data.subtypeID;
-        this.#generalName = data.generalDisplayName;
+        this.#generalName = data.generalName;
         this.#itemName = data.itemName;
         this.#stackable = data.stackable;
         this.#flags = data.flags;
@@ -97,6 +97,14 @@ class InventoryItem {
         return this.#maxStack;
     }
 
+    get flags() {
+        return new Proxy(this.#flags, {
+            set: () => {
+                throw new Error("InventoryItem.flags is a read only value.");
+            },
+        });
+    }
+
     hasFlag(flag) {
         return this.#flags.indexOf(flag) !== -1;
     }
@@ -105,7 +113,7 @@ class InventoryItem {
         let objectToBeStringified = {
             id: this.#id,
             subtypeID: this.#subtypeID,
-            generalDisplayName: this.#generalName,
+            generalName: this.#generalName,
             itemName: this.#itemName,
             stackable: this.#stackable,
             flags: this.#flags,
@@ -115,6 +123,34 @@ class InventoryItem {
         };
 
         return JSON.stringify(objectToBeStringified);
+    }
+
+    /**
+     * Creates a new item from an already existing item. In other words, this clones an item.
+     * @param {InventoryItem} item The item to be cloned.
+     * @returns {InventoryItem} The cloned item.
+     */
+    static fromItem(item) {
+        let itemClone = Object.create(InventoryItem.prototype);
+
+        itemClone.#id = item.id;
+        itemClone.#subtypeID = item.subtypeID;
+        itemClone.#generalName = item.generalName;
+        itemClone.#itemName = item.itemName;
+        itemClone.#stackable = item.stackable;
+
+        // item.flags returns a Proxy and not an Array, so we gotta make our own Array.
+        let itemFlags = [];
+        for (let iFlag = 0; iFlag < item.flags.length; iFlag++) {
+            itemFlags.push(item.flags[iFlag]);
+        }
+
+        itemClone.#flags = itemFlags;
+        itemClone.#maxStack = item.maxStack;
+        itemClone.count = item.count;
+        itemClone.data = item.data;
+
+        return itemClone;
     }
 }
 
@@ -554,7 +590,9 @@ class BenbotInstance {
     get inventory_item_flags() {
         return new Proxy(this.#private.inventory_item_flags, {
             set: () => {
-                throw "inventory_item_flags is read only. To add or remove flags use the add_inventory_item_flag and remove_inventory_item_flag methods respectively";
+                throw new Error(
+                    "BenbotInstance.inventory_item_flags is read only. To add or remove flags use the add_inventory_item_flag and remove_inventory_item_flag methods respectively",
+                );
             },
         });
     }
