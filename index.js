@@ -425,6 +425,10 @@ class User {
      * @type {Inventory}
      */
     inventory = null;
+    /**
+     * @type {DiscordUser}
+     */
+    #user = null;
     #id = "";
     /**
      * The user's ID.
@@ -449,6 +453,20 @@ class User {
     }
 
     /**
+     * The sequelize model that is tied to this User.
+     */
+    get model() {
+        return this.#model;
+    }
+
+    /**
+     * @param {DiscordUser} The Discord User object that is tied to this User.
+     */
+    get user() {
+        return this.#user;
+    }
+
+    /**
      * Creates a new User class.
      * @param {import('sequelize').Model} model The model that will be used to fill the class' fields.
      * @param {DiscordUser} user The user tied to this class.
@@ -461,6 +479,7 @@ class User {
         this.#id = model.id;
         this.#model = model;
         this.#instance = instance;
+        this.#user = user;
 
         this.inventory = Inventory.fromJSON(JSON.parse(model.inventory), user);
     }
@@ -513,6 +532,13 @@ class BenbotInstance {
         /** @type {Collection<string, User>} */
         userCache: new Collection(),
     };
+
+    /**
+     * `true` if the instance was already initialized with BenbotInstance.init(), false if otherwise.
+     */
+    get instanceInitialized() {
+        return this.#private.initialized;
+    }
 
     /**
      * Listens to a event within this instance's client.
@@ -723,6 +749,25 @@ class BenbotInstance {
         if (this.#private.userCache.has(user.id))
             return this.#private.userCache.get(user.id);
 
+        const userModel = await this.getUserModel(user);
+
+        const createdUser = new User(userModel, user, this);
+        this.#private.userCache.set(user.id, createdUser);
+        return createdUser;
+    }
+
+    /**
+     * Returns a sequelize model from a discord user.
+     * @param {DiscordUser} user
+     * @returns {Model}
+     */
+    async getUserModel(user) {
+        assert(
+            user instanceof DiscordUser,
+            "user argument must be a Discord User.",
+        );
+        assert(this.#private.initialized, INSTANCE_NOT_INITIALIZED);
+
         const [userModel, created] = await this.#private.userModel.findOrCreate(
             {
                 where: { id: user.id },
@@ -741,9 +786,7 @@ class BenbotInstance {
             await userModel.save();
         }
 
-        const createdUser = new User(userModel, user, this);
-        this.#private.userCache.set(user.id, createdUser);
-        return createdUser;
+        return userModel;
     }
 
     /**
@@ -958,4 +1001,5 @@ module.exports = {
     User,
     Inventory,
     InventoryItem,
+    INSTANCE_NOT_INITIALIZED,
 };
